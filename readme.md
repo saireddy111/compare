@@ -16,3 +16,35 @@ Please generate replication steps or unit/integration test structures for these 
 7. Lock Timeout Not Handled: Simulate database/row contention where a resource lock remains active, forcing the job into an indefinite retry loop without timing out gracefully.
 
 Please use standard mock libraries and C#/.NET structures (or the relevant tech stack used in our code) to demonstrate these failures clearly.
+
+
+SELECT *
+FROM Groups
+WHERE GroupNumber = '8379';
+
+SELECT *
+FROM GroupSkipPeriods
+WHERE GroupNumber = '8379';
+
+SELECT *
+FROM GroupCashDivisionTypes
+WHERE GroupNumber = '8379';
+
+DECLARE @GroupNumber VARCHAR(20) = '8379';
+
+SELECT
+    SP.GroupNumber,
+    SP.StartMonth,
+    SP.StartDay,
+    SP.EndMonth,
+    SP.EndDay,
+    SP.CashDivisionTypeId,
+    GCD.BillFrequencyId,
+    BFM.BillFrequencyName
+FROM GroupSkipPeriods SP
+LEFT JOIN GroupCashDivisionTypes GCD
+    ON GCD.GroupNumber = SP.GroupNumber
+    AND GCD.CashDivisionTypeId = SP.CashDivisionTypeId
+LEFT JOIN BillFrequencyMaster BFM
+    ON BFM.BillFrequencyId = GCD.BillFrequencyId
+WHERE SP.GroupNumber = @GroupNumber;
