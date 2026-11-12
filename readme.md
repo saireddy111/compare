@@ -1,22 +1,3 @@
-Act as a Senior QA and Backend Engineer. Based on the 7 critical shortfalls you identified, I need concrete test cases to simulate and prove that these errors can actually occur while executing the jobs. 
-
-For each of the following 7 issues, provide:
-1. The exact scenario setup (e.g., mock data payloads, system state, or database constraints).
-2. A step-by-step simulation/execution workflow.
-3. The expected failure outcome or assertion to look for.
-
-Please generate replication steps or unit/integration test structures for these specific items:
-
-1. No DbUpdateException Handling: Provide a test case that inserts a duplicate key or violates a foreign key constraint to prove silent data loss occurs without a thrown or caught exception.
-2. CancellationToken Misclassified: Simulate a job shutdown/cancellation signal mid-execution and show how the system erroneously marks it as a permanent job failure.
-3. RunId Null Not Validated: Pass a null or missing RunId parameter into the job execution pipeline to trigger and capture the NullReferenceException crash.
-4. No Batch Size Limit: Provide a simulation using a massive payload/batch that exceeds default payload constraints, forcing a silent data truncation scenario.
-5. Race Condition in Bronze Currency Check: Simulate a high-concurrency or multi-threaded environment where two concurrent jobs check and read stale currency data simultaneously before writing.
-6. Delete Operations Unverified: Force a cascading delete or independent record deletion where the main execution reports success but dependent/foreign records are left orphaned in the database.
-7. Lock Timeout Not Handled: Simulate database/row contention where a resource lock remains active, forcing the job into an indefinite retry loop without timing out gracefully.
-
-Please use standard mock libraries and C#/.NET structures (or the relevant tech stack used in our code) to demonstrate these failures clearly.
-
 
 SELECT *
 FROM Groups
@@ -46,5 +27,109 @@ LEFT JOIN GroupCashDivisionTypes GCD
     ON GCD.GroupNumber = SP.GroupNumber
     AND GCD.CashDivisionTypeId = SP.CashDivisionTypeId
 LEFT JOIN BillFrequencyMaster BFM
+
+
+
+
+
+
+==========
+public async Task<BillModesResponse?> GetBillModesAsync(
+    string groupNumber,
+    CancellationToken cancellationToken = default)
+{
+    cancellationToken.ThrowIfCancellationRequested();
+
+    if (dbContext == null)
+        throw new InvalidOperationException("Database context is not available.");
+
+    // 1. Check group existence
+    bool groupExists = await dbContext.Groups
+        .AnyAsync(g => g.GroupNumber == groupNumber, cancellationToken);
+
+    if (!groupExists)
+        return null;
+
+    // 2. Get skip periods
+    var skipPeriods = await dbContext.GroupSkipPeriods
+        .AsNoTracking()
+        .Where(sp => sp.GroupNumber == groupNumber)
+        .ToListAsync(cancellationToken);
+
+    if (skipPeriods.Count == 0)
+        return new BillModesResponse
+        {
+            BillModes = new List<BillModeResponse>()
+        };
+
+    // 3. Get cash division types
+    var cashDivisions = await dbContext.GroupCashDivisionTypes
+        .AsNoTracking()
+        .Where(gcd => gcd.GroupNumber == groupNumber)
+        .ToListAsync(cancellationToken);
+
+    // 4. Get bill frequency names
+    var frequencyNames =
+        await LoadBillFrequencyNamesAsync(cancellationToken);
+
+    // 5. Build bill modes
+    var billModes = skipPeriods.Select(sp =>
+    {
+        var cashDivision = cashDivisions.FirstOrDefault(gcd =>
+            gcd.CashDivisionTypeId == sp.CashDivisionTypeId);
+
+        string? frequencyName = null;
+
+        if (cashDivision != null)
+            frequencyNames.TryGetValue(
+                cashDivision.BillFrequencyId, out frequencyName);
+
+        return new BillModeResponse
+        {
+            BillModeId = GenerateBillModeId(
+                sp.StartMonth, sp.StartDay,
+                sp.EndMonth, sp.EndDay),
+
+            BillModeDescription = GenerateBillModeDescription(
+                sp.StartMonth, sp.StartDay,
+                sp.EndMonth, sp.EndDay),
+
+            BillFrequency = frequencyName,
+
+            SkipStartDay = sp.StartDay,
+            SkipStartMonth = sp.StartMonth,
+            SkipEndDay = sp.EndDay,
+            SkipEndMonth = sp.EndMonth
+        };
+    }).ToList();
+
+    return new BillModesResponse
+    {
+        BillModes = billModes.AsReadOnly()
+    };
+}
+
+==============
+private async Task<Dictionary<int, string>> LoadBillFrequencyNamesAsync(
+    CancellationToken cancellationToken)
+{
+    try
+    {
+        return await dbContext.BillFrequencies
+            .AsNoTracking()
+            .ToDictionaryAsync(
+                bf => bf.BillFrequencyId,
+                bf => bf.BillFrequencyName,
+                cancellationToken);
+    }
+    catch
+    {
+        return new Dictionary<int, string>();
+    }
+}
+
+
+
+
     ON BFM.BillFrequencyId = GCD.BillFrequencyId
 WHERE SP.GroupNumber = @GroupNumber;
